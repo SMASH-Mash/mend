@@ -49,17 +49,18 @@ We also built **Hearth**, an open-source, voice-first MCP host that simulates Al
 - **iFixit integration:** a symptom-to-repair-term mapper, multi-query search, ranking by exact model, difficulty and photos, caching, and bundled offline guides.
 - **Hearth (simulated Alexa+):**
   - A Node backend running one **Strands Agents** agent per device session, connected to Mend with Strands' `McpClient`. Elicitation requests are bridged to the device.
-  - The agent uses Google Gemini's free tier. OpenAI-compatible and Amazon Bedrock providers are also supported.
+  - The agent uses Google Gemini's free tier through Strands' **`ModelRouter` with `FallbackStrategy`**. At startup Hearth probes the newest Flash models and puts the healthy ones first, so overloaded free-tier models fail over automatically. OpenAI-compatible and Amazon Bedrock providers are also supported.
   - A browser front end with the Web Speech API for listening and speaking, the official MCP Apps **AppBridge** in a sandboxed iframe, an elicitation sheet you answer by voice or touch, an Alexa-style light bar and an inspector.
 - **Quality:**
   - Mend: 18 tests, including a full MCP session over HTTP that runs a repair, declines and then accepts a safety check, and approves a purchase.
-  - Hearth: 6 tests.
+  - Hearth: 7 tests.
   - Browser end-to-end checks of the device flow.
 
 ## Challenges we ran into
 
 - **Safety the model can't bypass.** A tool parameter like `powerIsOff: true` would let the model "confirm" for the person. Elicitation sends the question to the human instead, which needs stateful sessions and a host that can ask by voice.
 - **Natural language vs repair search.** iFixit search returns nothing for "water at the bottom", so we mapped symptoms to repair vocabulary and ranked candidates by the appliance's exact model.
+- **The AI improvised repair steps.** In early live tests the model "read" steps that weren't in the guide. It also guessed guide IDs, because Strands only passes a tool's text to the model. We now return every result as a spoken summary plus the structured data serialized as JSON text, as the MCP spec recommends for structured results. Step text is marked "read this exactly as written", and Mend's server instructions forbid inventing steps. In the final tests it reads the guide's own words, step by step.
 - **MCP Apps on a voice device.** The screen and the conversation must stay in sync. Touching "Next" on the screen calls the tool through the host and also tells the voice agent what happened (`updateModelContext`).
 - **Tooling gaps** (detailed in the friction log): Strands drops `structuredContent`, an AppBridge init-order pitfall, inlining the MCP Apps SDK into a single-file `ui://` resource, and the lack of a way to test an MCP server on a real Alexa+ device.
 
@@ -102,9 +103,11 @@ We also built **Hearth**, an open-source, voice-first MCP host that simulates Al
 - **Would build again:** **Yes.** It's the missing piece for smart displays.
 
 ### Strands Agents SDK (TypeScript)
-- **Used for:** Hearth's agent loop: `Agent`, `McpClient` with `elicitationCallback`, streaming events (`modelStreamUpdateEvent`, `before/afterToolCallEvent`, `modelMessageEvent`) and the Google Gemini model provider. A Bedrock provider is also wired in.
-- **Worked well:** Passing an `McpClient` directly as a tool source; elicitation support (form and URL); typed stream events that map neatly to a device UI; swapping model providers in one line.
-- **Needs work:** `McpTool` maps only `content` into `ToolResultBlock` and drops `structuredContent` and `_meta`, so an MCP Apps host built on Strands can't get the screen data from agent events. We wrapped `McpClient.callTool` as a workaround.
+- **Used for:** Hearth's agent loop: `Agent`, `McpClient` with `elicitationCallback`, streaming events (`modelStreamUpdateEvent`, `before/afterToolCallEvent`, `modelMessageEvent`), the Google Gemini model provider, and `ModelRouter` + `RoutingCandidate` + `FallbackStrategy` for automatic failover between models. A Bedrock provider is also wired in.
+- **Worked well:** Passing an `McpClient` directly as a tool source; elicitation support (form and URL); typed stream events that map neatly to a device UI; swapping model providers in one line; `ModelRouter` turning flaky free-tier models into a reliable agent.
+- **Needs work:**
+  - `McpTool` maps only `content` into `ToolResultBlock` and drops `structuredContent` and `_meta`, so an MCP Apps host built on Strands can't get the screen data from agent events. We wrapped `McpClient.callTool` as a workaround.
+  - `ModelRouter` failover waits for the provider client's own retries first. The Google client defaults to 5 attempts with exponential backoff, so each overloaded model cost about 15 s before the router switched.
 - **Onboarding:** under an hour from install to an agent calling Mend's tools.
 - **Would build again:** **Yes.** It was the fastest way to put a real agent behind a simulated device, and it's provider-agnostic.
 
@@ -123,7 +126,8 @@ We also built **Hearth**, an open-source, voice-first MCP host that simulates Al
 | 2 | Initialize an MCP Apps View with host context | `new AppBridge(…)`, then `setHostContext({...})`, then `connect()` | Context stored for `ui/initialize` | Unhandled rejection: "Not connected" | Medium | Pass `{ hostContext }` in the constructor options | Make `setHostContext` a no-op notify before connect, or document the ordering |
 | 3 | Ship a self-contained `ui://` HTML resource | Inlined `app-with-deps.js` into a `<script type="module">` | A bundle usable inline (IIFE/global) | ESM bundle ends with `export{…}`, unusable inline as-is | Medium | Rewrote the export clause into a local object at build time | Publish an IIFE build (`window.McpApps`) and a smaller View-only bundle |
 | 4 | Build an MCP Apps server with the familiar SDK | Started with `@modelcontextprotocol/sdk` 1.x | ext-apps server helpers work with it | ext-apps 2.x peers on the v2 split packages | Low | Migrated to `@modelcontextprotocol/server`, `node`, `client` v2 | Call out the v1→v2 requirement in the ext-apps quickstart |
-| 5 | Test the MCP server on Alexa+ | Looked for a way to add a self-hosted MCP URL to a device or test console | Voice and screen testing of tools, elicitation and MCP Apps | No path found | High (for this track) | Built Hearth, an open-source simulator | An Alexa+ developer console that accepts an MCP URL, with Echo Show screen and elicitation support |
+| 5 | Survive overloaded free-tier models with `ModelRouter` | Wrapped four `GoogleModel`s in `ModelRouter` (default `FallbackStrategy`) | A 503 from one model switches to the next within a second or two | Each failing model first went through the Google client's default retries (5 attempts, exponential backoff), so a turn took about 60 s | Medium | Set `clientConfig.httpOptions.retryOptions.attempts = 2`, and probe models at startup to order the healthy ones first | Have `ModelRouter` cap or disable provider-level retries for routed candidates, or document the interaction |
+| 6 | Test the MCP server on Alexa+ | Looked for a way to add a self-hosted MCP URL to a device or test console | Voice and screen testing of tools, elicitation and MCP Apps | No path found | High (for this track) | Built Hearth, an open-source simulator | An Alexa+ developer console that accepts an MCP URL, with Echo Show screen and elicitation support |
 
 ## Feature requests
 

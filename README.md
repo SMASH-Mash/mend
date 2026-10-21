@@ -37,7 +37,7 @@ Mend uses the parts of the spec that a home voice assistant needs. The official 
 | **Elicitation (form mode)** | Safety confirmations and purchase approvals go straight to the person. The model can't approve on their behalf. |
 | **Graceful degradation** | Clients without elicitation get a spoken "say yes when it's done" check instead of a silent skip (`confirmation_required`). |
 | **MCP Apps** (`ui://mend/screen.html`) | One Echo Show screen for guides, step photos, safety, passport, cart and maintenance. It uses the official `@modelcontextprotocol/ext-apps` SDK, declares its CSP (iFixit image CDN only), calls tools on touch, and keeps the voice assistant in sync with `updateModelContext`. |
-| **Structured content + speech-first text** | Every tool returns a 1–3 sentence spoken reply (`content`) plus typed data for the screen (`structuredContent`). |
+| **Structured content + speech-first text** | Every tool returns a 1–3 sentence spoken reply, then the same data serialized as JSON text (as the spec recommends, so any model sees ids like `guideId`), plus typed `structuredContent` for the screen. Step text is marked "read this exactly as written", so the assistant never improvises instructions. |
 | **Server instructions** | They tell the assistant the workflow and voice style (one step at a time, never answer safety checks). |
 | **Tool annotations** | `readOnlyHint` and `openWorldHint` mark safe lookups. |
 | **Resources** | `mend://household/passport` (JSON) and the `ui://` screen. |
